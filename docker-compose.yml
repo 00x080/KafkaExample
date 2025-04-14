@@ -15,18 +15,22 @@ services:
 
   producer:
     build:
-      context: ./src/InventoryProducer
+      context: .
       dockerfile: Dockerfile
     working_dir: /app/producer
     command: ["dotnet", "InventoryProducer.dll"]
     ports:
       - "5001:80"
-  
+    depends_on:
+      - kafka
+
   consumer:
     build:
-      context: ./src/InventoryConsumer
+      context: .
       dockerfile: Dockerfile
     working_dir: /app/consumer
     command: ["dotnet", "InventoryConsumer.dll"]
     ports:
       - "5002:80"
+    depends_on:
+      - kafka
