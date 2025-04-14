@@ -10,16 +10,20 @@ namespace InventoryProducer.Controllers;
 public class InventoryController : Controller
 {
     private readonly ProducerService _producerService;
+    private readonly ILogger<ProducerService> _logger;
 
-    public InventoryController(ProducerService producerService)
+    public InventoryController(ProducerService producerService, ILogger<ProducerService> logger)
     {
         _producerService = producerService;
+        _logger = logger;
     }
 
     [HttpPost]
     public async Task<IActionResult> UpdateInventory([FromBody] InventoryUpdateRequest request)
     {
         var message = JsonSerializer.Serialize(request);
+
+        _logger.LogInformation($"Producer sending inventory update: {message}");
 
         await _producerService.ProduceAsync("InventoryUpdates", message);
 
