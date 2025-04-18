@@ -1,5 +1,4 @@
 ﻿using Confluent.Kafka;
-using Microsoft.Extensions.Logging;
 
 namespace InventoryConsumer.Services
 {
@@ -8,99 +7,104 @@ namespace InventoryConsumer.Services
         private readonly IConsumer<Ignore, string> _consumer;
 
         private readonly ILogger<ConsumerService> _logger;
+        private readonly ConsumerConfig _consumerConfig;
 
         public ConsumerService(IConfiguration configuration, ILogger<ConsumerService> logger)
         {
             _logger = logger;
 
-            _logger.LogInformation("ConsumerService started and polling for messages.");
+            var bootstrapServers = configuration["Kafka:BootstrapServers"];
 
-            var consumerConfig = new ConsumerConfig
+            _logger.LogInformation($"Configuring Kafka to Bootstrap Servers {bootstrapServers}");
+
+            _consumerConfig = new ConsumerConfig
             {
-                BootstrapServers = configuration["Kafka:BootstrapServers"],
+                BootstrapServers = bootstrapServers,
                 GroupId = "InventoryConsumerGroup",
                 AutoOffsetReset = AutoOffsetReset.Earliest,
-                SessionTimeoutMs = 6000,
+                EnableAutoCommit = true
             };
 
-            _consumer = new ConsumerBuilder<Ignore, string>(consumerConfig).Build();
-
-            _logger.LogInformation("Consumer is subscribing to InventoryUpdates topic.");
-            _consumer.Subscribe("InventoryUpdates");
+            _consumer = new ConsumerBuilder<Ignore, string>(_consumerConfig).Build();
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("ConsumerService started and polling for messages.");
-
-            _consumer.Subscribe("InventoryUpdates");
-            _logger.LogInformation("Consumer is subscribing to InventoryUpdates topic.");
-
-            try
+            return Task.Run(async() =>
             {
-                while (!stoppingToken.IsCancellationRequested)
+                try
                 {
-                    _logger.LogInformation("ConsumerService is polling for Kafka messages.");
-                    await ProcessKafkaMessage(stoppingToken);
+                    SubscribeToKafka();
 
-                    try
+                    while (!stoppingToken.IsCancellationRequested)
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-                    }
-                    catch (TaskCanceledException)
-                    {
-                        // Token was cancelled during delay — exit gracefully
-                        break;
+                        await CheckForKafkaMessage(stoppingToken);
+                        Thread.Sleep(1000); // Sleep for a short duration to avoid busy waiting
                     }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogInformation("ConsumerService cancellation requested.");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unhandled exception in ExecuteAsync");
-            }
-            finally
-            {
-                _consumer.Close();
-                _logger.LogInformation("ConsumerService is stopping and Kafka consumer is closed.");
-            }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("Kafka polling was cancelled.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Unhandled exception in ExecuteAsync");
+                }
+                finally
+                {
+                    _logger.LogInformation("ConsumerService is stopping and Kafka consumer is closed.");
+                    _consumer.Close();
+                }
+            }, stoppingToken);
         }
 
-        public async Task ProcessKafkaMessage(CancellationToken stoppingToken)
+        private void SubscribeToKafka()
         {
-            try
+            _logger.LogInformation("Consumer is subscribing to InventoryUpdates topic.");
+
+            var subscribed = false;
+
+            while (!subscribed)
             {
-                _logger.LogInformation($"Cancellation requested before consuming: {stoppingToken.IsCancellationRequested}");
-
-                _logger.LogInformation("Polling Kafka for a message...");
-
-                var consumeResult = await Task.Run(() => _consumer.Consume(stoppingToken), stoppingToken);
-
-                if (consumeResult != null)
+                try
                 {
-                    _logger.LogInformation("Kafka message received successfully");
-
-                    var message = consumeResult.Message?.Value ?? "(null)";
-                    _logger.LogInformation($"Consumer received inventory update: {message}");
-                    _consumer.Commit(consumeResult);
+                    _consumer.Subscribe("InventoryUpdates");
+                    subscribed = true;
                 }
-                else
+                catch (Exception ex)
                 {
-                    _logger.LogWarning("ConsumeResult was null.");
+                    _logger.LogError(ex, "Error subscribing to Kafka topic.");
+                    Thread.Sleep(1000); // Retry after a short delay
                 }
             }
-            catch (OperationCanceledException oce)
+
+            _logger.LogInformation("Consumer is successfully subscribed to InventoryUpdates topic.");
+        }
+
+        public async Task CheckForKafkaMessage(CancellationToken stoppingToken)
+        {
+            await Task.Run(() =>
             {
-                _logger.LogWarning(oce, "Kafka polling was cancelled.");
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing Kafka message.");
-            }
+                try
+                {
+                    _logger.LogInformation("Polling Kafka for a message...");
+
+                    var consumeResult = _consumer.Consume(stoppingToken);
+
+                    if (consumeResult != null)
+                    {
+                        _logger.LogInformation($"Received message: {consumeResult.Message.Value}");
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("Kafka polling was cancelled.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing Kafka message.");
+                }
+            }, stoppingToken);
         }
     }
 }

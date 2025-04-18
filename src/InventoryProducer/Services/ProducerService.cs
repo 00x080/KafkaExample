@@ -5,16 +5,21 @@ namespace InventoryProducer.Services;
 public class ProducerService
 {
     private readonly IConfiguration _configuration;
-
     private readonly IProducer<Null, string> _producer;
+    private readonly ILogger<ProducerService> _logger;
 
-    public ProducerService(IConfiguration configuration)
+    public ProducerService(IConfiguration configuration, ILogger<ProducerService> logger)
     {
+        _logger = logger;
         _configuration = configuration;
+
+        var bootstrapServers = _configuration["Kafka:BootstrapServers"];
+
+        _logger.LogInformation($"Configuring Kafka to Bootstrap Servers {bootstrapServers}");
 
         var producerConfig = new ProducerConfig
         {
-            BootstrapServers = _configuration["Kafka:BootstrapServers"]
+            BootstrapServers = bootstrapServers
         };
 
         // create an instance of lidrd kafka
@@ -23,9 +28,18 @@ public class ProducerService
 
     public async Task ProduceAsync(string topic, string message)
     {
-        var kafkaMessage = new Message<Null, string> { Value = message, };
+        try
+        {
+            var kafkaMessage = new Message<Null, string> { Value = message, };
 
-        await _producer.ProduceAsync(topic, kafkaMessage);
+            var result = await _producer.ProduceAsync(topic, kafkaMessage);
+            _logger.LogInformation($"Message sent to topic {result.Topic}, partition {result.Partition}, offset {result.Offset}");
+            //await _producer.ProduceAsync(topic, kafkaMessage);
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Error producing message to Kafka.");
+        }
     }
 }
 
